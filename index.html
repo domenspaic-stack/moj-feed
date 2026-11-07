@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="sl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Moj feed</title>
+  <meta name="theme-color" content="#0f1115">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Moj feed">
+  <link rel="apple-touch-icon" href="icon-180.png">
+  <link rel="icon" type="image/png" href="icon-192.png">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="stylesheet" href="style.css">
+  <script src="https://accounts.google.com/gsi/client" async></script>
+</head>
+<body>
+  <header class="top">
+    <div class="brand">▶ Moj feed</div>
+    <div class="actions">
+      <button id="btnLogin" class="btn google">Prijava z Googlom</button>
+      <button id="btnRefresh" class="btn" title="Ponovno naloži iz YouTuba">↻ Osveži</button>
+      <button id="btnTopics" class="btn">Teme</button>
+      <button id="btnSettings" class="btn">Nastavitve</button>
+    </div>
+  </header>
+
+  <nav id="chips" class="chips"></nav>
+
+  <main>
+    <div id="status" class="status"></div>
+    <section id="grid" class="grid"></section>
+  </main>
+
+  <!-- Predvajalnik -->
+  <dialog id="player" class="dlg player">
+    <div class="player-head">
+      <span id="playerTitle"></span>
+      <button class="btn" data-close>✕</button>
+    </div>
+    <div class="frame"><iframe id="playerFrame" allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen></iframe></div>
+  </dialog>
+
+  <!-- Teme -->
+  <dialog id="topicsDlg" class="dlg">
+    <div class="dlg-head"><h2>Teme</h2><button class="btn" data-close>✕</button></div>
+    <ul id="topicList" class="list"></ul>
+    <form id="topicForm" class="form">
+      <h3 id="topicFormTitle">Dodaj novo temo</h3>
+      <input type="hidden" name="tid">
+      <label>Ime teme <input name="tname" required placeholder="npr. Meditacija"></label>
+      <p class="hint">Iskalni izrazi, ločeni z vejico. Če pustiš prazno, se za vse jezike uporabi ime teme.</p>
+      <label>🇸🇮 Slovenščina <input name="sl" placeholder="meditacija, čuječnost"></label>
+      <label>🇷🇸🇭🇷 Srbohrvaščina <input name="sh" placeholder="meditacija, svjesnost"></label>
+      <label>🇬🇧 Angleščina <input name="en" placeholder="meditation, mindfulness"></label>
+      <div class="row">
+        <button type="submit" class="btn primary">Shrani temo</button>
+        <button type="button" id="topicCancel" class="btn">Prekliči urejanje</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Nastavitve -->
+  <dialog id="settingsDlg" class="dlg">
+    <div class="dlg-head"><h2>Nastavitve</h2><button class="btn" data-close>✕</button></div>
+    <form id="settingsForm" class="form">
+      <label>YouTube API ključ
+        <input name="apiKey" type="password" autocomplete="off" placeholder="AIza…">
+      </label>
+      <p class="hint">Ključ ostane samo v tem brskalniku. Če si prijavljen z Googlom, ključ ni nujen.</p>
+
+      <fieldset>
+        <legend>Jeziki vsebine</legend>
+        <label class="check"><input type="checkbox" name="lang" value="sl"> Slovenščina</label>
+        <label class="check"><input type="checkbox" name="lang" value="sh"> Srbohrvaščina (srb., hrv., bos.)</label>
+        <label class="check"><input type="checkbox" name="lang" value="en"> Angleščina</label>
+      </fieldset>
+
+      <div class="grid2">
+        <label>Najkrajši video (minut)
+          <input name="minMin" type="number" min="0" max="120" step="1">
+        </label>
+        <label>Obdobje
+          <select name="period">
+            <option value="week">Zadnji teden</option>
+            <option value="month">Zadnji mesec</option>
+            <option value="year">Zadnje leto</option>
+            <option value="all">Kadarkoli</option>
+          </select>
+        </label>
+        <label>Razvrsti po
+          <select name="order">
+            <option value="relevance">Ustreznosti</option>
+            <option value="date">Najnovejše</option>
+            <option value="viewCount">Ogledih</option>
+          </select>
+        </label>
+        <label class="check"><input type="checkbox" name="hideWatched"> Skrij že ogledane</label>
+      </div>
+
+      <fieldset>
+        <legend>Blokirani kanali</legend>
+        <ul id="blockedList" class="list small"></ul>
+      </fieldset>
+
+      <div class="row"><button type="submit" class="btn primary">Shrani</button></div>
+    </form>
+  </dialog>
+
+  <script src="app.js"></script>
+</body>
+</html>

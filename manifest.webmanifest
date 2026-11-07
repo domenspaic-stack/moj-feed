@@ -1,0 +1,16 @@
+{
+  "name": "Moj feed",
+  "short_name": "Moj feed",
+  "description": "Osebni YouTube feed samo s temami, ki me zanimajo.",
+  "lang": "sl",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#0f1115",
+  "theme_color": "#0f1115",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
