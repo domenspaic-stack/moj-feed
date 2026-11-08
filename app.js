@@ -15,6 +15,8 @@ const store = {
 
 // ---------- Google prijava ----------
 const CLIENT_ID = '525201547500-cnjne0rmlmfeh70ls7otcdb0crgb5cd5.apps.googleusercontent.com';
+// Javni brskalniški ključ: omejen na YouTube Data API in na localhost:8080 ter domenspaic-stack.github.io.
+const DEFAULT_API_KEY = 'AIzaSyCz6F51ZAaHI0TOJu8RPwD9pqx5OyA522I';
 const SCOPE = 'https://www.googleapis.com/auth/youtube.readonly';
 const auth = {
   token: null,
@@ -22,7 +24,7 @@ const auth = {
   client: null,
   load() {
     try {
-      const s = JSON.parse(sessionStorage.getItem('mf_token') || 'null');
+      const s = JSON.parse(localStorage.getItem('mf_token') || 'null');
       if (s && s.exp > Date.now() + 60000) { this.token = s.token; this.exp = s.exp; }
     } catch { /* ni shranjeno */ }
   },
@@ -40,7 +42,7 @@ function initGoogle() {
       if (resp.error) { setStatus('Prijava ni uspela: ' + resp.error, true); return; }
       auth.token = resp.access_token;
       auth.exp = Date.now() + (+resp.expires_in || 3600) * 1000;
-      try { sessionStorage.setItem('mf_token', JSON.stringify({ token: auth.token, exp: auth.exp })); } catch { /* */ }
+      try { localStorage.setItem('mf_token', JSON.stringify({ token: auth.token, exp: auth.exp })); } catch { /* */ }
       store.set('signedIn', true);
       updateLoginBtn();
       loadFeed();
@@ -60,7 +62,7 @@ function signIn() {
 function signOut() {
   if (auth.token && window.google?.accounts?.oauth2) google.accounts.oauth2.revoke(auth.token, () => {});
   auth.token = null; auth.exp = 0;
-  try { sessionStorage.removeItem('mf_token'); } catch { /* */ }
+  try { localStorage.removeItem('mf_token'); } catch { /* */ }
   store.set('signedIn', false);
   delete state.cache.__subs;
   store.set('cache', state.cache);
@@ -106,7 +108,7 @@ const DEFAULT_TOPICS = [
 ];
 
 const state = {
-  apiKey: store.get('apiKey', ''),
+  apiKey: store.get('apiKey', '') || DEFAULT_API_KEY,
   topics: store.get('topics', DEFAULT_TOPICS),
   settings: Object.assign(
     { langs: ['sl', 'sh', 'en'], minMin: 4, period: 'year', order: 'relevance', hideWatched: false },
@@ -199,6 +201,8 @@ async function videoDetails(ids) {
 async function fetchSubscriptions() {
   const hit = state.cache.__subs;
   if (hit && Date.now() - hit.t < CACHE_TTL) return hit.videos;
+  // Brez veljavne prijave pokaži zadnje shranjene naročnine.
+  if (!auth.valid()) return hit ? hit.videos : [];
 
   const channels = [];
   let pageToken;
@@ -232,7 +236,9 @@ async function fetchSubscriptions() {
 
 function pruneCache() {
   const now = Date.now();
-  for (const [k, v] of Object.entries(state.cache)) if (now - v.t > CACHE_TTL * 4) delete state.cache[k];
+  for (const [k, v] of Object.entries(state.cache)) {
+    if (k !== '__subs' && now - v.t > CACHE_TTL * 4) delete state.cache[k];
+  }
   store.set('cache', state.cache);
 }
 
@@ -268,7 +274,7 @@ async function loadFeed(force = false) {
 
   // Združi: vsak video enkrat, z vsemi temami, v katerih se pojavi; teme se izmenjujejo.
   const byId = new Map();
-  if (auth.valid()) {
+  if (auth.valid() || state.cache.__subs) {
     try {
       results.push({ t: { id: 'subs' }, videos: await fetchSubscriptions() });
     } catch (e) {
@@ -355,10 +361,16 @@ function renderChips() {
   const box = $('#chips');
   box.replaceChildren();
   const all = [{ id: 'all', name: 'Vse' }, ...state.topics];
-  if (auth.valid()) all.splice(1, 0, { id: 'subs', name: '★ Moje naročnine' });
+  if (auth.valid() || auth.wasSignedIn()) all.splice(1, 0, { id: 'subs', name: '★ Moje naročnine' });
   for (const t of all) {
     const c = el('button', 'chip' + (t.id === 'subs' ? ' subs' : '') + (state.active === t.id ? ' active' : ''), t.name);
-    c.onclick = () => { state.active = t.id; render(); };
+    c.onclick = () => {
+      state.active = t.id;
+      render();
+      // Naročnine so starejše od 6 ur in prijava je potekla: tiho osveži prijavo (en klik, brez vprašanj).
+      const stale = !state.cache.__subs || Date.now() - state.cache.__subs.t > CACHE_TTL;
+      if (t.id === 'subs' && !auth.valid() && stale) signIn();
+    };
     box.append(c);
   }
 }
@@ -499,7 +511,7 @@ function renderBlocked() {
 function openSettings() {
   const f = $('#settingsForm');
   const s = state.settings;
-  f.apiKey.value = state.apiKey;
+  f.apiKey.value = state.apiKey === DEFAULT_API_KEY ? '' : state.apiKey;
   for (const cb of f.querySelectorAll('input[name=lang]')) cb.checked = s.langs.includes(cb.value);
   f.minMin.value = s.minMin;
   f.period.value = s.period;
@@ -512,7 +524,7 @@ function openSettings() {
 $('#settingsForm').addEventListener('submit', (e) => {
   e.preventDefault();
   const f = e.target;
-  state.apiKey = f.apiKey.value.trim();
+  state.apiKey = f.apiKey.value.trim() || DEFAULT_API_KEY;
   state.settings = {
     langs: [...f.querySelectorAll('input[name=lang]:checked')].map((c) => c.value),
     minMin: Math.max(0, +f.minMin.value || 0),
@@ -520,7 +532,7 @@ $('#settingsForm').addEventListener('submit', (e) => {
     order: f.order.value,
     hideWatched: f.hideWatched.checked,
   };
-  store.set('apiKey', state.apiKey);
+  store.set('apiKey', state.apiKey === DEFAULT_API_KEY ? '' : state.apiKey);
   store.set('settings', state.settings);
   $('#settingsDlg').close();
   loadFeed();
@@ -534,4 +546,6 @@ $('#btnRefresh').onclick = () => loadFeed(true);
 $('#btnLogin').onclick = () => (auth.valid() ? signOut() : signIn());
 
 updateLoginBtn();
+setInterval(updateLoginBtn, 30000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) { updateLoginBtn(); renderChips(); } });
 loadFeed();
