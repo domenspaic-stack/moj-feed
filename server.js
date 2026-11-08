@@ -15,7 +15,7 @@ const TYPES = {
   '.webmanifest': 'application/manifest+json',
 };
 const ALLOWED = new Set([
-  '/index.html', '/app.js', '/style.css', '/manifest.webmanifest',
+  '/index.html', '/app.js', '/channels.js', '/style.css', '/manifest.webmanifest',
   '/icon-180.png', '/icon-192.png', '/icon-512.png',
 ]);
 

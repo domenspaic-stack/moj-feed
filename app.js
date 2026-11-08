@@ -265,6 +265,95 @@ function pruneCache() {
   store.set('cache', state.cache);
 }
 
+// ---------- Kanali po temah ----------
+const UPLOAD_TTL = 30 * 60 * 1000;     // videi kanala se osvežijo največ vsakih 30 min
+const UPLOAD_FORCE_TTL = 2 * 60 * 1000; // gumb Osveži: kanali, starejši od 2 min
+const DISCOVER_EVERY = 3 * 86400000;    // nove kanale za temo išči največ vsake 3 dni
+const MIN_CHANNELS = 6;
+
+state.channels = store.get('channels', {}); // { 'topicId§lang': [[id, name]] } – samodejno odkriti
+state.disc = store.get('disc', {});         // { 'topicId§lang': čas zadnjega odkrivanja }
+state.uploads = store.get('uploads', {});   // { channelId: { t, videos } }
+
+function seedFor(topic, lang) {
+  const a = (typeof SEED_CHANNELS !== 'undefined' && SEED_CHANNELS[topic.id]?.[lang]) || [];
+  const b = (typeof SEED_CHANNELS !== 'undefined' && SEED_CHANNELS[topic.name.trim().toLowerCase()]?.[lang]) || [];
+  return [...a, ...b];
+}
+
+function channelsFor(topic, lang) {
+  const seen = new Set();
+  const out = [];
+  for (const [id, name] of seedFor(topic, lang)) if (!seen.has(id)) { seen.add(id); out.push({ id, name, auto: false }); }
+  for (const [id, name] of state.channels[topic.id + '§' + lang] || []) if (!seen.has(id)) { seen.add(id); out.push({ id, name, auto: true }); }
+  return out;
+}
+
+// Ali naslov videa ustreza temi (za samodejno odkrite kanale, ki objavljajo tudi drugo vsebino).
+function matchesTopic(v, topic) {
+  const words = [topic.name, ...Object.values(topic.terms || {}).flat()].filter(Boolean);
+  const title = v.title.toLowerCase();
+  return words.some((w) => {
+    const t = w.toLowerCase().trim();
+    if (t.length > 3) return title.includes(t);
+    // kratke besede (npr. "AI", "tao") samo kot cele besede
+    return title.split(/[^\p{L}\p{N}]+/u).includes(t);
+  });
+}
+
+function addChannels(topic, lang, videos) {
+  const key = topic.id + '§' + lang;
+  const list = state.channels[key] || [];
+  const have = new Set([...list.map((c) => c[0]), ...seedFor(topic, lang).map((c) => c[0])]);
+  for (const v of videos) {
+    if (v.dur < 240 || have.has(v.channelId)) continue;
+    have.add(v.channelId);
+    list.push([v.channelId, v.channel]);
+  }
+  state.channels[key] = list.slice(0, 20);
+  store.set('channels', state.channels);
+}
+
+async function fetchUploads(channelIds, force) {
+  const ttl = force ? UPLOAD_FORCE_TTL : UPLOAD_TTL;
+  const stale = channelIds.filter((id) => !state.uploads[id] || Date.now() - state.uploads[id].t > ttl);
+  const idsByCh = {};
+  let next = 0;
+  let quotaHit = false;
+  async function worker() {
+    while (next < stale.length && !quotaHit) {
+      const ch = stale[next++];
+      try {
+        const r = await yt('playlistItems', { part: 'contentDetails', playlistId: 'UU' + ch.slice(2), maxResults: 8 });
+        idsByCh[ch] = (r.items || []).map((it) => it.contentDetails?.videoId).filter(Boolean);
+      } catch (e) {
+        if (e.message === QUOTA_MSG) quotaHit = true;
+        else idsByCh[ch] = []; // kanal brez javnih videov
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: 6 }, worker));
+
+  const allIds = Object.values(idsByCh).flat();
+  if (allIds.length) {
+    const details = new Map((await videoDetails(allIds)).map((v) => [v.id, v]));
+    for (const [ch, ids] of Object.entries(idsByCh)) {
+      state.uploads[ch] = { t: Date.now(), videos: ids.map((id) => details.get(id)).filter(Boolean) };
+    }
+  }
+  // pospravi kanale, ki jih nobena tema več ne uporablja
+  const keep = new Set(channelIds);
+  for (const ch of Object.keys(state.uploads)) if (!keep.has(ch)) delete state.uploads[ch];
+  store.set('uploads', state.uploads);
+  if (quotaHit) throw new Error(QUOTA_MSG);
+}
+
+function cachedSearch(topic, lang) {
+  const s = state.settings;
+  const q = termsFor(topic, lang).join('|');
+  return state.cache[[topic.id, lang, q, s.order, s.period].join('§')]?.videos || [];
+}
+
 // ---------- Nalaganje feeda ----------
 async function loadFeed(force = false) {
   if (!state.apiKey && !auth.valid()) {
@@ -285,13 +374,38 @@ async function loadFeed(force = false) {
   setStatus('Nalagam videe …');
   const results = [];
   const errors = [];
+  // a) Odkrij nove kanale (drago iskanje) samo za teme, ki jih še nimajo dovolj, in največ vsake 3 dni.
   for (const g of groups) {
+    const key = g.t.id + '§' + g.l;
+    if (quotaBlocked() || channelsFor(g.t, g.l).length >= MIN_CHANNELS) continue;
+    if (Date.now() - (state.disc[key] || 0) < DISCOVER_EVERY) continue;
     try {
-      results.push({ ...g, videos: await fetchGroup(g.t, g.l, force) });
+      const vids = await fetchGroup(g.t, g.l, true);
+      addChannels(g.t, g.l, vids);
+      state.disc[key] = Date.now();
+      store.set('disc', state.disc);
     } catch (e) {
-      errors.push(e.message);
+      if (e.message !== QUOTA_MSG) errors.push(e.message);
       if (/ključ/.test(e.message)) break;
     }
+  }
+
+  // b) Najnovejši videi kanalov vseh tem (1 enota kvote na kanal).
+  const allCh = [...new Set(groups.flatMap((g) => channelsFor(g.t, g.l).map((c) => c.id)))];
+  try {
+    await fetchUploads(allCh, force);
+  } catch (e) {
+    errors.push(e.message);
+  }
+
+  for (const g of groups) {
+    const vids = [];
+    for (const c of channelsFor(g.t, g.l)) {
+      const up = state.uploads[c.id]?.videos || [];
+      vids.push(...(c.auto ? up.filter((v) => matchesTopic(v, g.t)) : up));
+    }
+    vids.sort((a, b) => b.published.localeCompare(a.published));
+    results.push({ ...g, videos: [...vids, ...cachedSearch(g.t, g.l)] });
   }
 
   // Združi: vsak video enkrat, z vsemi temami, v katerih se pojavi; teme se izmenjujejo.
@@ -321,7 +435,9 @@ async function loadFeed(force = false) {
   if (state.settings.order === 'viewCount') state.videos.sort((a, b) => b.views - a.views);
 
   render();
-  if (errors.length) setStatus([...new Set(errors)].join(' '), true);
+  // Opozorilo o kvoti pokaži samo, če ni nobenega videa za prikaz.
+  const shown = errors.filter((e) => e !== QUOTA_MSG || !visibleVideos().length);
+  if (shown.length) setStatus([...new Set(shown)].join(' '), true);
 }
 
 function langAllowed(v) {
