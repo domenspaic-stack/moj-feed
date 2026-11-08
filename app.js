@@ -2,7 +2,17 @@
 'use strict';
 
 const $ = (s) => document.querySelector(s);
-const CACHE_TTL = 6 * 60 * 60 * 1000; // 6 ur
+const CACHE_TTL = 12 * 60 * 60 * 1000; // 12 ur
+const FORCE_TTL = 60 * 60 * 1000; // gumb Osveži ponovno naloži samo starejše od 1 ure
+const QUOTA_MSG = 'Dnevna kvota za iskanje na YouTubu je porabljena. Prikazujem zadnje shranjene videe; nova iskanja bodo spet mogoča jutri ob 9:00.';
+
+function quotaBlocked() { return Date.now() < store.get('quotaUntil', 0); }
+function markQuota() {
+  const next = new Date();
+  next.setHours(9, 5, 0, 0); // YouTube kvoto ponastavi ob polnoči po kalifornijskem času (~9:00 pri nas)
+  if (next <= new Date()) next.setDate(next.getDate() + 1);
+  store.set('quotaUntil', next.getTime());
+}
 
 const store = {
   get(k, d) {
@@ -132,7 +142,10 @@ async function yt(endpoint, params) {
   const j = await r.json().catch(() => ({}));
   if (!r.ok) {
     const reason = j.error?.errors?.[0]?.reason || '';
-    if (reason === 'quotaExceeded') throw new Error('Dnevna kvota YouTube API je porabljena. Poskusi znova jutri (ponastavi se ob 9:00 po našem času).');
+    if (r.status === 429 || /quota|dailyLimit|rateLimit/i.test(reason + ' ' + (j.error?.message || ''))) {
+      if (endpoint === 'search') markQuota();
+      throw new Error(QUOTA_MSG);
+    }
     if (reason === 'keyInvalid' || r.status === 400 && /API key/i.test(j.error?.message || '')) throw new Error('API ključ ni veljaven. Preveri ga v Nastavitvah.');
     if (r.status === 401) {
       auth.token = null; updateLoginBtn();
@@ -158,18 +171,28 @@ function termsFor(topic, lang) {
   return t.length ? t : [topic.name];
 }
 
-async function fetchGroup(topic, lang) {
+async function fetchGroup(topic, lang, force = false) {
   const s = state.settings;
   const q = termsFor(topic, lang).join('|');
   const key = [topic.id, lang, q, s.order, s.period].join('§');
   const hit = state.cache[key];
-  if (hit && Date.now() - hit.t < CACHE_TTL) return hit.videos;
+  if (hit && Date.now() - hit.t < (force ? FORCE_TTL : CACHE_TTL)) return hit.videos;
+  if (quotaBlocked()) {
+    if (hit) return hit.videos; // kvota porabljena: uporabi zadnje shranjene
+    throw new Error(QUOTA_MSG);
+  }
 
-  const res = await yt('search', {
+  let res;
+  try {
+    res = await yt('search', {
     part: 'snippet', type: 'video', maxResults: 25, q,
     relevanceLanguage: LANGS[lang].rel, order: s.order,
     publishedAfter: publishedAfter(s.period), videoEmbeddable: 'true',
-  });
+    });
+  } catch (e) {
+    if (hit && e.message === QUOTA_MSG) return hit.videos;
+    throw e;
+  }
   const ids = (res.items || []).map((i) => i.id?.videoId).filter(Boolean);
   const videos = await videoDetails(ids);
   state.cache[key] = { t: Date.now(), videos };
@@ -254,7 +277,6 @@ async function loadFeed(force = false) {
     }
     return;
   }
-  if (force) state.cache = {};
   const langs = state.settings.langs;
   const groups = [];
   for (const t of state.topics) for (const l of langs) groups.push({ t, l });
@@ -265,10 +287,10 @@ async function loadFeed(force = false) {
   const errors = [];
   for (const g of groups) {
     try {
-      results.push({ ...g, videos: await fetchGroup(g.t, g.l) });
+      results.push({ ...g, videos: await fetchGroup(g.t, g.l, force) });
     } catch (e) {
       errors.push(e.message);
-      if (/kvota|ključ/.test(e.message)) break;
+      if (/ključ/.test(e.message)) break;
     }
   }
 
